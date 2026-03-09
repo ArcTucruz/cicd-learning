@@ -1,4 +1,4 @@
-name: CI/CD Demo Pipeline
+name: CI/CD Pipeline with Vault + OpenTofu
 
 on:
   push:
@@ -6,31 +6,61 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1 - Check out the code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Run tests
+      # Step 2 - Install Vault CLI on the pipeline server
+      - name: Install Vault CLI
         run: |
-          echo "Running tests..."
-          echo "Test 1 passed!"
-          echo "Test 2 passed!"
-          echo "All tests passed!"
+          wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt update && sudo apt install vault -y
 
-      - name: Build application
+      # Step 3 - Authenticate to Vault using AppRole
+      - name: Authenticate to Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
         run: |
-          echo "Building application..."
-          echo "Build successful!"
+          echo "Authenticating to Vault using AppRole..."
+          VAULT_TOKEN=$(vault write -format=json auth/approle/login \
+            role_id="$VAULT_ROLE_ID" \
+            secret_id="$VAULT_SECRET_ID" | jq -r '.auth.client_token')
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+          echo "Authentication successful!"
 
+      # Step 4 - Fetch MySQL credentials from Vault
       - name: Fetch credentials from Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
         run: |
-          echo "Connecting to Vault..."
-          echo "Credentials retrieved successfully!"
+          echo "Fetching MySQL credentials from Vault..."
+          MYSQL_HOST=$(vault kv get -field=host kv/mysql/wp)
+          MYSQL_USER=$(vault kv get -field=username kv/mysql/wp)
+          MYSQL_DB=$(vault kv get -field=database kv/mysql/wp)
+          echo "MYSQL_HOST=$MYSQL_HOST" >> $GITHUB_ENV
+          echo "MYSQL_USER=$MYSQL_USER" >> $GITHUB_ENV
+          echo "MYSQL_DB=$MYSQL_DB" >> $GITHUB_ENV
+          echo "Credentials fetched successfully!"
 
-      - name: Deploy application
+      # Step 5 - Install OpenTofu
+      - name: Install OpenTofu
         run: |
-          echo "Deploying to server..."
-          echo "Deployment complete!"
+          curl -fsSL https://get.opentofu.org/install-opentofu.sh | sudo bash -s -- --install-method deb
+
+      # Step 6 - Run OpenTofu
+      - name: Run OpenTofu
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        run: |
+          echo "Running OpenTofu..."
+          echo "MySQL Host: $MYSQL_HOST"
+          echo "MySQL User: $MYSQL_USER"
+          echo "MySQL Database: $MYSQL_DB"
+          echo "OpenTofu provisioning complete!"
